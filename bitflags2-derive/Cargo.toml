@@ -1,0 +1,16 @@
+[package]
+name = "bitflags2-derive"
+version = "0.1.0"
+edition = "2024"
+description = "Attribute macro implementation for the bitflags2 crate"
+license = "MIT"
+authors = ["cet"]
+repository = "https://github.com/cet-t/bitflags2"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", features = ["full", "extra-traits"] }
