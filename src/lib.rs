@@ -148,26 +148,25 @@ mod tests {
         assert_eq!(as_u128, 0x04);
     }
 
-    #[cfg(feature = "serde")]
-    mod serde_tests {
-        use crate::tests::Permission;
+    #[test]
+    fn serde_derives_forward() {
         use serde::{Deserialize, Serialize};
 
+        #[flags]
         #[derive(Serialize, Deserialize)]
-        struct Wrapper {
-            perm: Permission,
+        enum LocalPermission {
+            #[flag]
+            None = 0x00,
+            #[flag(0x01)]
+            Read,
+            #[flag(0x02)]
+            Write,
         }
 
-        #[test]
-        fn serde_roundtrip() {
-            let perm = Permission::Read | Permission::Write;
-            let wrapper = Wrapper { perm };
+        let perm = LocalPermission::Read | LocalPermission::Write;
+        let json = ::serde_json::to_string(&perm).unwrap();
+        let back: LocalPermission = ::serde_json::from_str(&json).unwrap();
 
-            let json = serde_json::to_string(&wrapper).unwrap();
-            let back: Wrapper = serde_json::from_str(&json).unwrap();
-
-            assert_eq!(back.perm, perm);
-            assert_eq!(back.perm, Permission::Read | Permission::Write);
-        }
+        assert_eq!(back, perm);
     }
 }

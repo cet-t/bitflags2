@@ -1,6 +1,6 @@
 [package]
 name = "bitflags2"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2024"
 description = "Derive-like bitflags powered by an attribute macro"
 readme = "README.md"
@@ -15,8 +15,9 @@ crate-type = ["rlib"]
 serde = ["dep:serde"]
 
 [dependencies]
-bitflags2-derive = { version = "0.1.1", path = "bitflags2-derive" }
+bitflags2-derive = { version = "0", path = "bitflags2-derive" }
 serde = { version = "1", optional = true, features = ["derive"] }
 
 [dev-dependencies]
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"

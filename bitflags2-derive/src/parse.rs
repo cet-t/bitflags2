@@ -1,17 +1,27 @@
 use std::collections::HashMap;
 
 use proc_macro2::Span;
+use syn::punctuated::Punctuated;
+use syn::token::Comma;
 use syn::{
-    Attribute, BinOp, Error, Expr, ExprLit, ExprPath, ItemEnum, Lit, Meta, Result, Visibility,
+    Attribute, BinOp, Error, Expr, ExprLit, ExprPath, ItemEnum, Lit, Meta, Path, Result,
+    Visibility,
 };
 
 use crate::model::FlagVariant;
+
+/// Derives implemented by the macro itself; user-provided duplicates are dropped.
+const RESERVED_DERIVES: &[&str] = &["Copy", "Clone", "PartialEq", "Eq", "Debug"];
 
 /// A fully parsed `#[flags]` input enum.
 pub(crate) struct FlagsInput {
     pub(crate) vis: Visibility,
     pub(crate) ident: syn::Ident,
     pub(crate) variants: Vec<FlagVariant>,
+    /// User-provided derives forwarded to the generated type (e.g. `Serialize`).
+    pub(crate) forwarded_derives: Vec<Path>,
+    /// Other container attributes forwarded as-is (e.g. `#[serde(...)]`, docs).
+    pub(crate) forwarded_attrs: Vec<Attribute>,
 }
 
 struct RawFlagVariant {
@@ -44,6 +54,7 @@ pub(crate) fn parse_flags(input: ItemEnum) -> Result<FlagsInput> {
 
     let vis = input.vis;
     let ident = input.ident;
+    let (forwarded_derives, forwarded_attrs) = split_container_attrs(input.attrs)?;
     let mut raw_variants = Vec::new();
 
     for variant in input.variants {
@@ -84,7 +95,43 @@ pub(crate) fn parse_flags(input: ItemEnum) -> Result<FlagsInput> {
         vis,
         ident,
         variants,
+        forwarded_derives,
+        forwarded_attrs,
     })
+}
+
+/// Splits the enum's outer attributes into forwarded derives and other attributes.
+///
+/// Derives implemented directly by this macro (`Copy`, `Clone`, `PartialEq`,
+/// `Eq`, `Debug`) are dropped to avoid conflicting impls; everything else is
+/// forwarded to the generated newtype so that, for example, `#[derive(Serialize,
+/// Deserialize)]` keeps working on the flag type directly.
+fn split_container_attrs(attrs: Vec<Attribute>) -> Result<(Vec<Path>, Vec<Attribute>)> {
+    let mut derives = Vec::new();
+    let mut others = Vec::new();
+
+    for attr in attrs {
+        if attr.path().is_ident("derive") {
+            let paths = attr.parse_args_with(Punctuated::<Path, Comma>::parse_terminated)?;
+            for path in paths {
+                if !is_reserved_derive(&path) {
+                    derives.push(path);
+                }
+            }
+        } else {
+            others.push(attr);
+        }
+    }
+
+    Ok((derives, others))
+}
+
+/// Returns true for derives the macro implements directly and must not forward.
+fn is_reserved_derive(path: &Path) -> bool {
+    let Some(last) = path.segments.last() else {
+        return false;
+    };
+    RESERVED_DERIVES.contains(&last.ident.to_string().as_str())
 }
 
 impl Resolver {

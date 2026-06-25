@@ -8,6 +8,10 @@ pub(crate) fn generate(input: FlagsInput) -> TokenStream2 {
     let vis = input.vis;
     let enum_ident = input.ident;
     let variants = input.variants;
+    let forwarded_attrs = input.forwarded_attrs;
+    let forwarded_derives = input.forwarded_derives;
+
+    let derive_attr = derive_attr(forwarded_derives);
 
     let consts = variants.iter().map(|variant| {
         let ident = &variant.ident;
@@ -44,7 +48,8 @@ pub(crate) fn generate(input: FlagsInput) -> TokenStream2 {
     let impl_ints_macro = format_ident!("__bitflags2_impl_ints_for_{}", enum_ident);
 
     quote! {
-        #[derive(Copy, Clone, PartialEq, Eq)]
+        #(#forwarded_attrs)*
+        #derive_attr
         #vis struct #enum_ident(u128);
 
         impl #enum_ident {
@@ -149,27 +154,6 @@ pub(crate) fn generate(input: FlagsInput) -> TokenStream2 {
             }
         }
 
-        #[cfg(feature = "serde")]
-        impl ::serde::Serialize for #enum_ident {
-            fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-            where
-                S: ::serde::Serializer,
-            {
-                serializer.serialize_u128(self.0)
-            }
-        }
-
-        #[cfg(feature = "serde")]
-        impl<'de> ::serde::Deserialize<'de> for #enum_ident {
-            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-            where
-                D: ::serde::Deserializer<'de>,
-            {
-                let bits = u128::deserialize(deserializer)?;
-                Ok(Self(bits))
-            }
-        }
-
         impl ::core::fmt::Debug for #enum_ident {
             fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
                 let mut first = true;
@@ -180,6 +164,14 @@ pub(crate) fn generate(input: FlagsInput) -> TokenStream2 {
                 Ok(())
             }
         }
+    }
+}
+
+fn derive_attr(forwarded_derives: Vec<syn::Path>) -> TokenStream2 {
+    if forwarded_derives.is_empty() {
+        quote! { #[derive(Copy, Clone, PartialEq, Eq)] }
+    } else {
+        quote! { #[derive(Copy, Clone, PartialEq, Eq, #(#forwarded_derives),*)] }
     }
 }
 
