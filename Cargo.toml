@@ -1,6 +1,6 @@
 [package]
 name = "bitflags2"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 description = "Derive-like bitflags powered by an attribute macro"
 readme = "README.md"
@@ -11,11 +11,12 @@ repository = "https://github.com/cet-t/bitflags2"
 [lib]
 crate-type = ["rlib"]
 
-[profile.release]
-opt-level = "z"
-lto = true
-codegen-units = 1
-panic = "abort"
+[features]
+serde = ["dep:serde"]
 
 [dependencies]
 bitflags2-derive = { version = "0.1.1", path = "bitflags2-derive" }
+serde = { version = "1", optional = true, features = ["derive"] }
+
+[dev-dependencies]
+serde_json = "1"

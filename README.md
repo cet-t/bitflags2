@@ -9,12 +9,13 @@
 - Combine flags with `|`, `&`, `^`, `!` and assignment variants.
 - Compare and convert with `u8`, `u16`, `u32`, `u64`, and `u128`.
 - Print enabled flag names with `Debug`.
+- Optional `serde` integration via the `serde` feature.
 
 ## Usage
 
 ```toml
 [dependencies]
-bitflags2 = "0.1"
+bitflags2 = { version = "0.1", features = ["serde"] }
 ```
 
 ```rust
@@ -76,6 +77,43 @@ Value resolution order:
 
 Automatic assignment starts with `0` for the first unvalued flag, then shifts by one bit from the previous single-bit value.
 
+## serde support
+
+Enable the `serde` feature to derive `Serialize` and `Deserialize` for generated flag types:
+
+```toml
+[dependencies]
+bitflags2 = { version = "0.1", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+```
+
+```rust
+use bitflags2::flags;
+use serde::{Deserialize, Serialize};
+
+#[flags]
+enum Permission {
+    #[flag]
+    None = 0x0000,
+    #[flag(0x0002)]
+    Read,
+    #[flag(0x0004)]
+    Write,
+}
+
+#[derive(Serialize, Deserialize)]
+struct Permissions {
+    perm: Permission,
+}
+
+let p = Permissions {
+    perm: Permission::Read | Permission::Write,
+};
+let json = serde_json::to_string(&p).unwrap();
+let back: Permissions = serde_json::from_str(&json).unwrap();
+assert_eq!(back.perm, p.perm);
+```
+
 ## Generated API
 
 For each `#[flags] enum Name { ... }`, `bitflags2` generates an integer-backed `Name` type with:
@@ -89,6 +127,8 @@ For each `#[flags] enum Name { ... }`, `bitflags2` generates an integer-backed `
 - `From<u8/u16/u32/u64/u128>` and reverse conversions
 - `PartialEq<u8/u16/u32/u64/u128>` in both directions
 - `Copy`, `Clone`, `PartialEq`, `Eq`, and `Debug`
+
+When the `serde` feature is enabled, the generated type also implements `Serialize` and `Deserialize`.
 
 ## Notes
 

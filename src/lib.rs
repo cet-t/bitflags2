@@ -147,4 +147,27 @@ mod tests {
         assert_eq!(as_u64, 0x04);
         assert_eq!(as_u128, 0x04);
     }
+
+    #[cfg(feature = "serde")]
+    mod serde_tests {
+        use crate::tests::Permission;
+        use serde::{Deserialize, Serialize};
+
+        #[derive(Serialize, Deserialize)]
+        struct Wrapper {
+            perm: Permission,
+        }
+
+        #[test]
+        fn serde_roundtrip() {
+            let perm = Permission::Read | Permission::Write;
+            let wrapper = Wrapper { perm };
+
+            let json = serde_json::to_string(&wrapper).unwrap();
+            let back: Wrapper = serde_json::from_str(&json).unwrap();
+
+            assert_eq!(back.perm, perm);
+            assert_eq!(back.perm, Permission::Read | Permission::Write);
+        }
+    }
 }

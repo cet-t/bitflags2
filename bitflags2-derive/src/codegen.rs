@@ -149,6 +149,27 @@ pub(crate) fn generate(input: FlagsInput) -> TokenStream2 {
             }
         }
 
+        #[cfg(feature = "serde")]
+        impl ::serde::Serialize for #enum_ident {
+            fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+            where
+                S: ::serde::Serializer,
+            {
+                serializer.serialize_u128(self.0)
+            }
+        }
+
+        #[cfg(feature = "serde")]
+        impl<'de> ::serde::Deserialize<'de> for #enum_ident {
+            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+            where
+                D: ::serde::Deserializer<'de>,
+            {
+                let bits = u128::deserialize(deserializer)?;
+                Ok(Self(bits))
+            }
+        }
+
         impl ::core::fmt::Debug for #enum_ident {
             fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
                 let mut first = true;
