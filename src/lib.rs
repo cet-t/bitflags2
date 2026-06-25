@@ -13,7 +13,7 @@
 //! enum Permission {
 //!     #[flag]
 //!     None = 0x0000,
-//!     #[flag(0x0001)]
+//!     #[flag(Read | Write | Execute)]
 //!     All,
 //!     #[flag(0x0002)]
 //!     Read,
@@ -42,7 +42,7 @@ mod tests {
     enum Permission {
         #[flag]
         None = 0x0000,
-        #[flag(0x0001)]
+        #[flag(Read | Write | Execute)]
         All,
         #[flag(0x0002)]
         Read,
@@ -70,6 +70,8 @@ mod tests {
         perm |= Permission::Read | Permission::Write;
 
         assert_eq!(perm.bits(), 0x0006);
+        assert_eq!(Permission::All.bits(), 0x000e);
+        assert!(Permission::All.has_flag(Permission::Execute));
         assert!(perm.has_flag(Permission::Read));
         assert!(perm.has_flag(Permission::Write));
         assert!(!perm.has_flag(Permission::Execute));
