@@ -13,9 +13,16 @@ pub(crate) fn generate(input: FlagsInput) -> TokenStream2 {
 
     let derive_attr = derive_attr(forwarded_derives);
 
-    let consts = variants.iter().map(|variant| {
+    let max_value = variants
+        .iter()
+        .filter_map(|variant| variant.value)
+        .max()
+        .unwrap_or(0);
+    let backing = backing_type(max_value);
+
+    let consts = variants.iter().filter(|v| !v.is_ignored()).map(|variant| {
         let ident = &variant.ident;
-        let value = u128_literal(variant.value);
+        let value = u128_literal(variant.value.unwrap());
         quote! {
             #[allow(non_upper_case_globals)]
             pub const #ident: Self = Self(#value);
@@ -24,10 +31,10 @@ pub(crate) fn generate(input: FlagsInput) -> TokenStream2 {
 
     let debug_arms = variants
         .iter()
-        .filter(|variant| variant.value != 0)
+        .filter(|variant| !variant.is_ignored() && variant.value != Some(0))
         .map(|variant| {
             let name = variant.ident.to_string();
-            let value = u128_literal(variant.value);
+            let value = u128_literal(variant.value.unwrap());
             quote! {
                 if self.has_flag(Self(#value)) {
                     if !first {
@@ -41,7 +48,7 @@ pub(crate) fn generate(input: FlagsInput) -> TokenStream2 {
 
     let zero_name = variants
         .iter()
-        .find(|variant| variant.value == 0)
+        .find(|variant| variant.value == Some(0))
         .map(|variant| variant.ident.to_string())
         .unwrap_or_else(|| "0".to_string());
 
@@ -50,7 +57,7 @@ pub(crate) fn generate(input: FlagsInput) -> TokenStream2 {
     quote! {
         #(#forwarded_attrs)*
         #derive_attr
-        #vis struct #enum_ident(u128);
+        #vis struct #enum_ident(#backing);
 
         impl #enum_ident {
             #(#consts)*
@@ -59,11 +66,11 @@ pub(crate) fn generate(input: FlagsInput) -> TokenStream2 {
                 Self(0)
             }
 
-            pub const fn bits(self) -> u128 {
+            pub const fn bits(self) -> #backing {
                 self.0
             }
 
-            pub const fn from_bits(bits: u128) -> Self {
+            pub const fn from_bits(bits: #backing) -> Self {
                 Self(bits)
             }
 
@@ -77,7 +84,7 @@ pub(crate) fn generate(input: FlagsInput) -> TokenStream2 {
                 $(
                     impl ::core::convert::From<$ty> for #enum_ident {
                         fn from(bits: $ty) -> Self {
-                            Self(bits as u128)
+                            Self(bits as #backing)
                         }
                     }
 
@@ -89,13 +96,13 @@ pub(crate) fn generate(input: FlagsInput) -> TokenStream2 {
 
                     impl ::core::cmp::PartialEq<$ty> for #enum_ident {
                         fn eq(&self, rhs: &$ty) -> bool {
-                            self.0 == *rhs as u128
+                            self.0 as u128 == *rhs as u128
                         }
                     }
 
                     impl ::core::cmp::PartialEq<#enum_ident> for $ty {
                         fn eq(&self, rhs: &#enum_ident) -> bool {
-                            *self as u128 == rhs.0
+                            *self as u128 == rhs.0 as u128
                         }
                     }
                 )*
@@ -172,6 +179,20 @@ fn derive_attr(forwarded_derives: Vec<syn::Path>) -> TokenStream2 {
         quote! { #[derive(Copy, Clone, PartialEq, Eq)] }
     } else {
         quote! { #[derive(Copy, Clone, PartialEq, Eq, #(#forwarded_derives),*)] }
+    }
+}
+
+fn backing_type(max_value: u128) -> TokenStream2 {
+    if max_value <= u8::MAX as u128 {
+        quote! { u8 }
+    } else if max_value <= u16::MAX as u128 {
+        quote! { u16 }
+    } else if max_value <= u32::MAX as u128 {
+        quote! { u32 }
+    } else if max_value <= u64::MAX as u128 {
+        quote! { u64 }
+    } else {
+        quote! { u128 }
     }
 }
 

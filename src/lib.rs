@@ -149,6 +149,106 @@ mod tests {
     }
 
     #[test]
+    fn chooses_smallest_backing_integer_width() {
+        #[flags]
+        enum U8Backed {
+            #[flag(0)]
+            None,
+            #[flag(0xff)]
+            Max,
+        }
+
+        #[flags]
+        enum U16Backed {
+            #[flag]
+            None,
+            #[flag]
+            One,
+            #[flag]
+            Two,
+            #[flag]
+            Four,
+            #[flag]
+            Eight,
+            #[flag]
+            Sixteen,
+            #[flag]
+            ThirtyTwo,
+            #[flag]
+            SixtyFour,
+            #[flag]
+            OneTwentyEight,
+            #[flag]
+            TwoFiftySix,
+        }
+
+        #[flags]
+        enum U32Backed {
+            #[flag(0x0001_0000)]
+            Bit16,
+        }
+
+        #[flags]
+        enum U64Backed {
+            #[flag(0x0001_0000_0000)]
+            Bit32,
+        }
+
+        #[flags]
+        enum U128Backed {
+            #[flag(0x0001_0000_0000_0000_0000)]
+            Bit64,
+        }
+
+        assert_eq!(::core::mem::size_of::<U8Backed>(), 1);
+        assert_eq!(::core::mem::size_of::<U16Backed>(), 2);
+        assert_eq!(::core::mem::size_of::<U32Backed>(), 4);
+        assert_eq!(::core::mem::size_of::<U64Backed>(), 8);
+        assert_eq!(::core::mem::size_of::<U128Backed>(), 16);
+
+        let u8_bits: u8 = U8Backed::Max.bits();
+        let u16_bits: u16 = U16Backed::TwoFiftySix.bits();
+        let u32_bits: u32 = U32Backed::Bit16.bits();
+        let u64_bits: u64 = U64Backed::Bit32.bits();
+        let u128_bits: u128 = U128Backed::Bit64.bits();
+
+        assert_eq!(u8_bits, 0xff);
+        assert_eq!(u16_bits, 0x0100);
+        assert_eq!(u32_bits, 0x0001_0000);
+        assert_eq!(u64_bits, 0x0001_0000_0000);
+        assert_eq!(u128_bits, 0x0001_0000_0000_0000_0000);
+    }
+
+    #[test]
+    fn ignores_flag_variant() {
+        #[flags]
+        enum ReadWrite {
+            #[flag]
+            None,
+            #[flag(ignore)]
+            Deprecated,
+            #[flag(0x01)]
+            Read,
+            #[flag(0x02)]
+            Write,
+        }
+
+        assert_eq!(::core::mem::size_of::<ReadWrite>(), 1);
+        assert_eq!(ReadWrite::bits(ReadWrite::None), 0);
+        assert_eq!(ReadWrite::bits(ReadWrite::Read), 0x01);
+        assert_eq!(ReadWrite::bits(ReadWrite::Write), 0x02);
+
+        assert_eq!(format!("{:?}", ReadWrite::None), "None");
+        assert_eq!(
+            format!("{:?}", ReadWrite::Read | ReadWrite::Write),
+            "Read | Write"
+        );
+
+        let from_bits: ReadWrite = ReadWrite::from_bits(0x01);
+        assert_eq!(from_bits, ReadWrite::Read);
+    }
+
+    #[test]
     fn serde_derives_forward() {
         use serde::{Deserialize, Serialize};
 

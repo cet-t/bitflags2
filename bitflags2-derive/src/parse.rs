@@ -4,11 +4,10 @@ use proc_macro2::Span;
 use syn::punctuated::Punctuated;
 use syn::token::Comma;
 use syn::{
-    Attribute, BinOp, Error, Expr, ExprLit, ExprPath, ItemEnum, Lit, Meta, Path, Result,
-    Visibility,
+    Attribute, BinOp, Error, Expr, ExprLit, ExprPath, ItemEnum, Lit, Meta, Path, Result, Visibility,
 };
 
-use crate::model::FlagVariant;
+use crate::model::{FlagDirective, FlagVariant};
 
 /// Derives implemented by the macro itself; user-provided duplicates are dropped.
 const RESERVED_DERIVES: &[&str] = &["Copy", "Clone", "PartialEq", "Eq", "Debug"];
@@ -26,7 +25,7 @@ pub(crate) struct FlagsInput {
 
 struct RawFlagVariant {
     ident: syn::Ident,
-    attr_expr: Option<Expr>,
+    directive: Option<FlagDirective>,
     discriminant_expr: Option<Expr>,
 }
 
@@ -75,19 +74,39 @@ pub(crate) fn parse_flags(input: ItemEnum) -> Result<FlagsInput> {
 
         raw_variants.push(RawFlagVariant {
             ident: variant.ident,
-            attr_expr: parse_flag_attr(flag_attr)?,
+            directive: parse_flag_attr(flag_attr)?,
             discriminant_expr: variant.discriminant.map(|(_, expr)| expr),
         });
+    }
+
+    let ignored_count = raw_variants
+        .iter()
+        .filter(|variant| matches!(variant.directive, Some(FlagDirective::Ignore)))
+        .count();
+    if ignored_count == raw_variants.len() {
+        return Err(Error::new(
+            Span::call_site(),
+            "flags enum must have at least one non-ignored variant",
+        ));
     }
 
     let mut resolver = Resolver::new(raw_variants)?;
     let mut variants = Vec::new();
 
     for index in 0..resolver.raw_variants.len() {
+        if matches!(
+            resolver.raw_variants[index].directive,
+            Some(FlagDirective::Ignore)
+        ) {
+            continue;
+        }
+        let directive = resolver.raw_variants[index].directive.clone();
+        let ident = resolver.raw_variants[index].ident.clone();
         let value = resolver.resolve_variant(index)?;
         variants.push(FlagVariant {
-            ident: resolver.raw_variants[index].ident.clone(),
-            value,
+            ident,
+            directive: directive.unwrap_or(FlagDirective::Auto),
+            value: Some(value),
         });
     }
 
@@ -157,6 +176,9 @@ impl Resolver {
     }
 
     fn resolve_variant(&mut self, index: usize) -> Result<u128> {
+        if let Some(FlagDirective::Ignore) = self.raw_variants[index].directive {
+            return Ok(0);
+        }
         match self.states[index] {
             ResolveState::Resolved(value) => return Ok(value),
             ResolveState::Resolving => {
@@ -170,20 +192,21 @@ impl Resolver {
 
         self.states[index] = ResolveState::Resolving;
 
-        let attr_expr = self.raw_variants[index].attr_expr.clone();
+        let directive = self.raw_variants[index].directive.clone();
         let discriminant_expr = self.raw_variants[index].discriminant_expr.clone();
         let span = self.raw_variants[index].ident.span();
 
-        let attr_value = match attr_expr.as_ref() {
-            Some(expr) => Some(self.eval_flag_expr(expr)?),
-            None => None,
+        let explicit_value = match directive {
+            Some(FlagDirective::Auto) | None => None,
+            Some(FlagDirective::Value(expr)) => Some(self.eval_flag_expr(&expr)?),
+            Some(FlagDirective::Ignore) => unreachable!(),
         };
         let discriminant_value = match discriminant_expr.as_ref() {
             Some(expr) => Some(parse_int_expr(expr)?),
             None => None,
         };
 
-        let value = match (attr_value, discriminant_value) {
+        let value = match (explicit_value, discriminant_value) {
             (Some(attr), Some(discriminant)) if attr != discriminant => {
                 return Err(Error::new(
                     span,
@@ -256,15 +279,27 @@ fn flag_attr(attrs: &[Attribute]) -> Result<Option<&Attribute>> {
     Ok(found)
 }
 
-fn parse_flag_attr(attr: &Attribute) -> Result<Option<Expr>> {
+fn parse_flag_attr(attr: &Attribute) -> Result<Option<FlagDirective>> {
     match &attr.meta {
-        Meta::Path(_) => Ok(None),
-        Meta::List(list) => Ok(Some(list.parse_args::<Expr>()?)),
+        Meta::Path(_) => Ok(Some(FlagDirective::Auto)),
+        Meta::List(list) => Ok(Some(parse_flag_expr(list.parse_args::<Expr>()?)?)),
         Meta::NameValue(_) => Err(Error::new_spanned(
             attr,
-            "expected #[flag] or #[flag(value)]",
+            "expected #[flag], #[flag(ignore)], or #[flag(value)]",
         )),
     }
+}
+
+fn parse_flag_expr(expr: Expr) -> Result<FlagDirective> {
+    if let Expr::Path(ExprPath {
+        qself: None, path, ..
+    }) = &expr
+    {
+        if path.is_ident("ignore") {
+            return Ok(FlagDirective::Ignore);
+        }
+    }
+    Ok(FlagDirective::Value(expr))
 }
 
 fn parse_int_expr(expr: &Expr) -> Result<u128> {
