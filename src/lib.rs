@@ -6,6 +6,9 @@
 //!
 //! # Example
 //!
+//! An explicit backing type can be requested with `#[flags(u32)]`; without an
+//! argument, the smallest integer type that fits every flag value is chosen.
+//!
 //! ```
 //! use bitflags2::flags;
 //!
@@ -37,6 +40,19 @@ pub use bitflags2_derive::flags;
 #[cfg(test)]
 mod tests {
     use super::flags;
+
+    const X: u8 = 0x02;
+    #[flags(u8)]
+    enum Role {
+        #[flag]
+        Owner = Manager | Admin | Member,
+        #[flag]
+        Manager = 0x01,
+        #[flag]
+        Admin = X,
+        #[flag]
+        Member = 0x04,
+    }
 
     #[flags]
     enum Permission {
@@ -246,6 +262,35 @@ mod tests {
 
         let from_bits: ReadWrite = ReadWrite::from_bits(0x01);
         assert_eq!(from_bits, ReadWrite::Read);
+    }
+
+    #[test]
+    fn discriminant_can_reference_flag_names_and_external_consts() {
+        assert_eq!(Role::Owner.bits(), 0x07);
+        assert_eq!(Role::Admin.bits(), 0x02);
+        assert!(Role::Owner.has_flag(Role::Manager));
+        assert!(Role::Owner.has_flag(Role::Admin));
+        assert!(Role::Owner.has_flag(Role::Member));
+    }
+
+    #[test]
+    fn all_returns_union_of_flags() {
+        assert_eq!(Permission::all().bits(), 0x000e);
+        assert_eq!(AutoAssigned::all().bits(), 0x0007);
+    }
+
+    #[test]
+    fn accepts_explicit_backing_type() {
+        #[flags(u32)]
+        enum WideFlags {
+            #[flag]
+            None,
+            #[flag]
+            One,
+        }
+
+        assert_eq!(::core::mem::size_of::<WideFlags>(), 4);
+        assert_eq!(WideFlags::One.bits(), 1u32);
     }
 
     #[test]

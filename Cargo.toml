@@ -1,6 +1,6 @@
 [package]
 name = "bitflags2"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 description = "Derive-like bitflags powered by an attribute macro"
 readme = "README.md"

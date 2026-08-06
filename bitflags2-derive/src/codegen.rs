@@ -1,4 +1,4 @@
-use proc_macro2::{Literal, TokenStream as TokenStream2};
+use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
 
 use crate::parse::FlagsInput;
@@ -13,30 +13,35 @@ pub(crate) fn generate(input: FlagsInput) -> TokenStream2 {
 
     let derive_attr = derive_attr(forwarded_derives);
 
-    let max_value = variants
-        .iter()
-        .filter_map(|variant| variant.value)
-        .max()
-        .unwrap_or(0);
-    let backing = backing_type(max_value);
+    let backing = match input.explicit_backing {
+        Some(ident) => quote! { #ident },
+        None => {
+            let max_value = variants
+                .iter()
+                .filter_map(|variant| variant.value_literal)
+                .max()
+                .unwrap_or(0);
+            backing_type(max_value)
+        }
+    };
 
     let consts = variants.iter().filter(|v| !v.is_ignored()).map(|variant| {
         let ident = &variant.ident;
-        let value = u128_literal(variant.value.unwrap());
+        let value_tokens = &variant.value_tokens;
         quote! {
             #[allow(non_upper_case_globals)]
-            pub const #ident: Self = Self(#value);
+            pub const #ident: Self = Self((#value_tokens) as #backing);
         }
     });
 
     let debug_arms = variants
         .iter()
-        .filter(|variant| !variant.is_ignored() && variant.value != Some(0))
+        .filter(|variant| !variant.is_ignored() && variant.value_literal != Some(0))
         .map(|variant| {
+            let ident = &variant.ident;
             let name = variant.ident.to_string();
-            let value = u128_literal(variant.value.unwrap());
             quote! {
-                if self.has_flag(Self(#value)) {
+                if self.has_flag(Self::#ident) {
                     if !first {
                         f.write_str(" | ")?;
                     }
@@ -48,9 +53,17 @@ pub(crate) fn generate(input: FlagsInput) -> TokenStream2 {
 
     let zero_name = variants
         .iter()
-        .find(|variant| variant.value == Some(0))
+        .find(|variant| variant.value_literal == Some(0))
         .map(|variant| variant.ident.to_string())
         .unwrap_or_else(|| "0".to_string());
+
+    let all_terms = variants
+        .iter()
+        .filter(|v| !v.is_ignored())
+        .map(|v| {
+            let ident = &v.ident;
+            quote! { Self::#ident.0 }
+        });
 
     let impl_ints_macro = format_ident!("__bitflags2_impl_ints_for_{}", enum_ident);
 
@@ -64,6 +77,10 @@ pub(crate) fn generate(input: FlagsInput) -> TokenStream2 {
 
             pub const fn empty() -> Self {
                 Self(0)
+            }
+
+            pub const fn all() -> Self {
+                Self(#(#all_terms)|*)
             }
 
             pub const fn bits(self) -> #backing {
@@ -196,6 +213,3 @@ fn backing_type(max_value: u128) -> TokenStream2 {
     }
 }
 
-fn u128_literal(value: u128) -> Literal {
-    Literal::u128_unsuffixed(value)
-}

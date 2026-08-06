@@ -1,16 +1,45 @@
 use std::collections::HashMap;
 
-use proc_macro2::Span;
+use proc_macro2::{Literal, Span, TokenStream};
+use quote::quote;
+use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
 use syn::token::Comma;
 use syn::{
-    Attribute, BinOp, Error, Expr, ExprLit, ExprPath, ItemEnum, Lit, Meta, Path, Result, Visibility,
+    Attribute, BinOp, Error, Expr, ExprLit, ExprPath, Ident, ItemEnum, Lit, Meta, Path, Result,
+    Visibility,
 };
 
 use crate::model::{FlagDirective, FlagVariant};
 
 /// Derives implemented by the macro itself; user-provided duplicates are dropped.
 const RESERVED_DERIVES: &[&str] = &["Copy", "Clone", "PartialEq", "Eq", "Debug"];
+
+/// Explicit backing integer type requested via `#[flags(u32)]`.
+pub(crate) struct BackingType {
+    ident: Ident,
+    max: u128,
+}
+
+impl Parse for BackingType {
+    fn parse(input: ParseStream) -> Result<Self> {
+        let ident: Ident = input.parse()?;
+        let max = match ident.to_string().as_str() {
+            "u8" => u8::MAX as u128,
+            "u16" => u16::MAX as u128,
+            "u32" => u32::MAX as u128,
+            "u64" => u64::MAX as u128,
+            "u128" => u128::MAX,
+            other => {
+                return Err(Error::new_spanned(
+                    &ident,
+                    format!("unsupported backing type `{other}`, expected one of u8, u16, u32, u64, u128"),
+                ));
+            }
+        };
+        Ok(Self { ident, max })
+    }
+}
 
 /// A fully parsed `#[flags]` input enum.
 pub(crate) struct FlagsInput {
@@ -21,6 +50,8 @@ pub(crate) struct FlagsInput {
     pub(crate) forwarded_derives: Vec<Path>,
     /// Other container attributes forwarded as-is (e.g. `#[serde(...)]`, docs).
     pub(crate) forwarded_attrs: Vec<Attribute>,
+    /// Explicit backing type ident requested via `#[flags(u32)]`, if any.
+    pub(crate) explicit_backing: Option<Ident>,
 }
 
 struct RawFlagVariant {
@@ -29,21 +60,32 @@ struct RawFlagVariant {
     discriminant_expr: Option<Expr>,
 }
 
+/// The result of resolving a variant's value expression.
+#[derive(Clone)]
+struct ResolvedVariant {
+    /// The value folded down to an integer literal, when every referenced
+    /// name is a sibling flag with a known literal value.
+    literal: Option<u128>,
+    /// Rust expression tokens computing the value, with sibling flag-name
+    /// references rewritten to `Self::Name.0`.
+    tokens: TokenStream,
+}
+
 #[derive(Clone, Copy)]
-enum ResolveState {
+enum CacheState {
     Unresolved,
     Resolving,
-    Resolved(u128),
 }
 
 struct Resolver {
     raw_variants: Vec<RawFlagVariant>,
     indexes: HashMap<String, usize>,
-    states: Vec<ResolveState>,
+    states: Vec<CacheState>,
+    resolved: Vec<Option<ResolvedVariant>>,
 }
 
 /// Parses the source enum and resolves every flag value.
-pub(crate) fn parse_flags(input: ItemEnum) -> Result<FlagsInput> {
+pub(crate) fn parse_flags(input: ItemEnum, backing: Option<BackingType>) -> Result<FlagsInput> {
     if !input.generics.params.is_empty() || input.generics.where_clause.is_some() {
         return Err(Error::new_spanned(
             input.generics,
@@ -102,13 +144,42 @@ pub(crate) fn parse_flags(input: ItemEnum) -> Result<FlagsInput> {
         }
         let directive = resolver.raw_variants[index].directive.clone();
         let ident = resolver.raw_variants[index].ident.clone();
-        let value = resolver.resolve_variant(index)?;
+        let resolved = resolver.resolve_variant(index)?;
         variants.push(FlagVariant {
             ident,
             directive: directive.unwrap_or(FlagDirective::Auto),
-            value: Some(value),
+            value_literal: resolved.literal,
+            value_tokens: resolved.tokens,
         });
     }
+
+    let explicit_backing = if let Some(backing) = backing {
+        let max_value = variants
+            .iter()
+            .filter_map(|v| v.value_literal)
+            .max()
+            .unwrap_or(0);
+        if max_value > backing.max {
+            return Err(Error::new_spanned(
+                &backing.ident,
+                format!(
+                    "flag value {max_value:#x} does not fit in `{}`",
+                    backing.ident
+                ),
+            ));
+        }
+        Some(backing.ident)
+    } else {
+        for variant in &variants {
+            if variant.value_literal.is_none() {
+                return Err(Error::new_spanned(
+                    &variant.ident,
+                    "flag value is not a constant integer; specify an explicit backing type, e.g. #[flags(u32)]",
+                ));
+            }
+        }
+        None
+    };
 
     Ok(FlagsInput {
         vis,
@@ -116,6 +187,7 @@ pub(crate) fn parse_flags(input: ItemEnum) -> Result<FlagsInput> {
         variants,
         forwarded_derives,
         forwarded_attrs,
+        explicit_backing,
     })
 }
 
@@ -166,54 +238,63 @@ impl Resolver {
             }
         }
 
-        let states = vec![ResolveState::Unresolved; raw_variants.len()];
+        let states = vec![CacheState::Unresolved; raw_variants.len()];
+        let resolved = vec![None; raw_variants.len()];
 
         Ok(Self {
             raw_variants,
             indexes,
             states,
+            resolved,
         })
     }
 
-    fn resolve_variant(&mut self, index: usize) -> Result<u128> {
+    fn resolve_variant(&mut self, index: usize) -> Result<ResolvedVariant> {
         if let Some(FlagDirective::Ignore) = self.raw_variants[index].directive {
-            return Ok(0);
+            return Ok(ResolvedVariant {
+                literal: Some(0),
+                tokens: quote! { 0 },
+            });
         }
-        match self.states[index] {
-            ResolveState::Resolved(value) => return Ok(value),
-            ResolveState::Resolving => {
-                return Err(Error::new_spanned(
-                    &self.raw_variants[index].ident,
-                    "cyclic flag value reference",
-                ));
-            }
-            ResolveState::Unresolved => {}
+        if let Some(resolved) = &self.resolved[index] {
+            return Ok(resolved.clone());
+        }
+        if let CacheState::Resolving = self.states[index] {
+            return Err(Error::new_spanned(
+                &self.raw_variants[index].ident,
+                "cyclic flag value reference",
+            ));
         }
 
-        self.states[index] = ResolveState::Resolving;
+        self.states[index] = CacheState::Resolving;
 
         let directive = self.raw_variants[index].directive.clone();
         let discriminant_expr = self.raw_variants[index].discriminant_expr.clone();
         let span = self.raw_variants[index].ident.span();
 
-        let explicit_value = match directive {
+        let explicit = match directive {
             Some(FlagDirective::Auto) | None => None,
-            Some(FlagDirective::Value(expr)) => Some(self.eval_flag_expr(&expr)?),
+            Some(FlagDirective::Value(expr)) => Some(self.resolve_expr(&expr)?),
             Some(FlagDirective::Ignore) => unreachable!(),
         };
-        let discriminant_value = match discriminant_expr.as_ref() {
-            Some(expr) => Some(parse_int_expr(expr)?),
+        let discriminant = match discriminant_expr.as_ref() {
+            Some(expr) => Some(self.resolve_expr(expr)?),
             None => None,
         };
 
-        let value = match (explicit_value, discriminant_value) {
-            (Some(attr), Some(discriminant)) if attr != discriminant => {
-                return Err(Error::new(
-                    span,
-                    "#[flag(value)] and discriminant value differ",
-                ));
+        let resolved = match (explicit, discriminant) {
+            (Some(attr), Some(discriminant)) => {
+                if let (Some(a), Some(d)) = (attr.literal, discriminant.literal) {
+                    if a != d {
+                        return Err(Error::new(
+                            span,
+                            "#[flag(value)] and discriminant value differ",
+                        ));
+                    }
+                }
+                attr
             }
-            (Some(attr), _) => attr,
+            (Some(attr), None) => attr,
             (None, Some(discriminant)) => discriminant,
             (None, None) => {
                 let previous = if index == 0 {
@@ -221,46 +302,82 @@ impl Resolver {
                 } else {
                     Some(self.resolve_variant(index - 1)?)
                 };
-                next_auto_value(previous, span)?
+                let value = next_auto_value(previous.and_then(|p| p.literal), span)?;
+                let literal = Literal::u128_unsuffixed(value);
+                ResolvedVariant {
+                    literal: Some(value),
+                    tokens: quote! { #literal },
+                }
             }
         };
 
-        self.states[index] = ResolveState::Resolved(value);
-        Ok(value)
+        self.resolved[index] = Some(resolved.clone());
+        Ok(resolved)
     }
 
-    fn eval_flag_expr(&mut self, expr: &Expr) -> Result<u128> {
+    fn resolve_expr(&mut self, expr: &Expr) -> Result<ResolvedVariant> {
         match expr {
             Expr::Lit(ExprLit {
                 lit: Lit::Int(lit), ..
-            }) => lit.base10_parse::<u128>(),
-            Expr::Path(path) => self.eval_path(path),
-            Expr::Binary(binary) if matches!(binary.op, BinOp::BitOr(_)) => {
-                Ok(self.eval_flag_expr(&binary.left)? | self.eval_flag_expr(&binary.right)?)
+            }) => {
+                let value = lit.base10_parse::<u128>()?;
+                let literal = Literal::u128_unsuffixed(value);
+                Ok(ResolvedVariant {
+                    literal: Some(value),
+                    tokens: quote! { #literal },
+                })
             }
-            Expr::Paren(paren) => self.eval_flag_expr(&paren.expr),
-            Expr::Group(group) => self.eval_flag_expr(&group.expr),
+            Expr::Path(path) => self.resolve_path(path),
+            Expr::Binary(binary) if matches!(binary.op, BinOp::BitOr(_)) => {
+                let left = self.resolve_expr(&binary.left)?;
+                let right = self.resolve_expr(&binary.right)?;
+                let literal = match (left.literal, right.literal) {
+                    (Some(a), Some(b)) => Some(a | b),
+                    _ => None,
+                };
+                let (left_tokens, right_tokens) = (left.tokens, right.tokens);
+                Ok(ResolvedVariant {
+                    literal,
+                    tokens: quote! { (#left_tokens) | (#right_tokens) },
+                })
+            }
+            Expr::Paren(paren) => self.resolve_expr(&paren.expr),
+            Expr::Group(group) => self.resolve_expr(&group.expr),
             _ => Err(Error::new_spanned(
                 expr,
-                "expected an integer literal, flag name, or `|` expression",
+                "expected an integer literal, flag name, external constant path, or `|` expression",
             )),
         }
     }
 
-    fn eval_path(&mut self, path: &ExprPath) -> Result<u128> {
+    fn resolve_path(&mut self, path: &ExprPath) -> Result<ResolvedVariant> {
         if path.qself.is_some() {
             return Err(Error::new_spanned(path, "expected a flag variant name"));
         }
 
         let Some(ident) = path.path.get_ident() else {
-            return Err(Error::new_spanned(path, "expected a flag variant name"));
+            // A multi-segment path (e.g. `module::CONST`) can only refer to
+            // an external item; forward it unresolved.
+            return Ok(ResolvedVariant {
+                literal: None,
+                tokens: quote! { #path },
+            });
         };
 
-        let Some(index) = self.indexes.get(&ident.to_string()).copied() else {
-            return Err(Error::new_spanned(ident, "unknown flag variant name"));
-        };
+        if let Some(&index) = self.indexes.get(&ident.to_string()) {
+            let resolved = self.resolve_variant(index)?;
+            return Ok(ResolvedVariant {
+                literal: resolved.literal,
+                tokens: quote! { Self::#ident.0 },
+            });
+        }
 
-        self.resolve_variant(index)
+        // Not a sibling flag name; treat as an external constant whose value
+        // only the final Rust compilation can know.
+        Ok(ResolvedVariant {
+            literal: None,
+            tokens: quote! { #ident },
+        })
     }
 }
 
@@ -302,15 +419,6 @@ fn parse_flag_expr(expr: Expr) -> Result<FlagDirective> {
     Ok(FlagDirective::Value(expr))
 }
 
-fn parse_int_expr(expr: &Expr) -> Result<u128> {
-    match expr {
-        Expr::Lit(ExprLit {
-            lit: Lit::Int(lit), ..
-        }) => lit.base10_parse::<u128>(),
-        _ => Err(Error::new_spanned(expr, "expected integer literal")),
-    }
-}
-
 fn next_auto_value(previous: Option<u128>, span: Span) -> Result<u128> {
     match previous {
         None => Ok(0),
@@ -318,7 +426,7 @@ fn next_auto_value(previous: Option<u128>, span: Span) -> Result<u128> {
         Some(value) if value.is_power_of_two() => Ok(value << 1),
         Some(_) => Err(Error::new(
             span,
-            "cannot auto-assign flag value after a composite value",
+            "cannot auto-assign flag value after a value that is composite or not a constant integer",
         )),
     }
 }
