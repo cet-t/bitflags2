@@ -56,16 +56,16 @@ mod tests {
 
     #[flags]
     enum Permission {
-        #[flag]
-        None = 0x0000,
-        #[flag(Read | Write | Execute)]
-        All,
+        #[flag(0x0000)]
+        None,
         #[flag(0x0002)]
         Read,
         #[flag(0x0004)]
         Write,
         #[flag(0x0008)]
         Execute,
+        #[flag(Read | Write | Execute)]
+        All,
     }
 
     #[flags]
