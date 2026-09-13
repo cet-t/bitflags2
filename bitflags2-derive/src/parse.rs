@@ -13,7 +13,7 @@ use syn::{
 use crate::model::{FlagDirective, FlagVariant};
 
 /// Derives implemented by the macro itself; user-provided duplicates are dropped.
-const RESERVED_DERIVES: &[&str] = &["Copy", "Clone", "PartialEq", "Eq", "Debug"];
+const RESERVED_DERIVES: [&str; 5] = ["Copy", "Clone", "PartialEq", "Eq", "Debug"];
 
 /// Explicit backing integer type requested via `#[flags(u32)]`.
 pub(crate) struct BackingType {
@@ -33,7 +33,9 @@ impl Parse for BackingType {
             other => {
                 return Err(Error::new_spanned(
                     &ident,
-                    format!("unsupported backing type `{other}`, expected one of u8, u16, u32, u64, u128"),
+                    format!(
+                        "unsupported backing type `{other}`, expected one of u8, u16, u32, u64, u128"
+                    ),
                 ));
             }
         };
@@ -44,7 +46,7 @@ impl Parse for BackingType {
 /// A fully parsed `#[flags]` input enum.
 pub(crate) struct FlagsInput {
     pub(crate) vis: Visibility,
-    pub(crate) ident: syn::Ident,
+    pub(crate) ident: Ident,
     pub(crate) variants: Vec<FlagVariant>,
     /// User-provided derives forwarded to the generated type (e.g. `Serialize`).
     pub(crate) forwarded_derives: Vec<Path>,
@@ -55,7 +57,7 @@ pub(crate) struct FlagsInput {
 }
 
 struct RawFlagVariant {
-    ident: syn::Ident,
+    ident: Ident,
     directive: Option<FlagDirective>,
     discriminant_expr: Option<Expr>,
 }
@@ -219,10 +221,10 @@ fn split_container_attrs(attrs: Vec<Attribute>) -> Result<(Vec<Path>, Vec<Attrib
 
 /// Returns true for derives the macro implements directly and must not forward.
 fn is_reserved_derive(path: &Path) -> bool {
-    let Some(last) = path.segments.last() else {
-        return false;
-    };
-    RESERVED_DERIVES.contains(&last.ident.to_string().as_str())
+    match path.segments.last() {
+        Some(last) => RESERVED_DERIVES.contains(&last.ident.to_string().as_str()),
+        _ => false,
+    }
 }
 
 impl Resolver {
@@ -284,13 +286,14 @@ impl Resolver {
 
         let resolved = match (explicit, discriminant) {
             (Some(attr), Some(discriminant)) => {
-                if let (Some(a), Some(d)) = (attr.literal, discriminant.literal) {
-                    if a != d {
-                        return Err(Error::new(
-                            span,
-                            "#[flag(value)] and discriminant value differ",
-                        ));
-                    }
+                if let Some(a) = attr.literal
+                    && let Some(d) = discriminant.literal
+                    && a != d
+                {
+                    return Err(Error::new(
+                        span,
+                        "#[flag(value)] and discriminant value differ",
+                    ));
                 }
                 attr
             }
@@ -320,7 +323,7 @@ impl Resolver {
             Expr::Lit(ExprLit {
                 lit: Lit::Int(lit), ..
             }) => {
-                let value = lit.base10_parse::<u128>()?;
+                let value: u128 = lit.base10_parse()?;
                 let literal = Literal::u128_unsuffixed(value);
                 Ok(ResolvedVariant {
                     literal: Some(value),
@@ -411,12 +414,12 @@ fn parse_flag_expr(expr: Expr) -> Result<FlagDirective> {
     if let Expr::Path(ExprPath {
         qself: None, path, ..
     }) = &expr
+        && path.is_ident("ignore")
     {
-        if path.is_ident("ignore") {
-            return Ok(FlagDirective::Ignore);
-        }
+        Ok(FlagDirective::Ignore)
+    } else {
+        Ok(FlagDirective::Value(expr))
     }
-    Ok(FlagDirective::Value(expr))
 }
 
 fn next_auto_value(previous: Option<u128>, span: Span) -> Result<u128> {

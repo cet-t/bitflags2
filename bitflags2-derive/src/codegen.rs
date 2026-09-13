@@ -57,13 +57,10 @@ pub(crate) fn generate(input: FlagsInput) -> TokenStream2 {
         .map(|variant| variant.ident.to_string())
         .unwrap_or_else(|| "0".to_string());
 
-    let all_terms = variants
-        .iter()
-        .filter(|v| !v.is_ignored())
-        .map(|v| {
-            let ident = &v.ident;
-            quote! { Self::#ident.0 }
-        });
+    let all_terms = variants.iter().filter(|v| !v.is_ignored()).map(|v| {
+        let ident = &v.ident;
+        quote! { Self::#ident.0 }
+    });
 
     let impl_ints_macro = format_ident!("__bitflags2_impl_ints_for_{}", enum_ident);
 
@@ -97,7 +94,7 @@ pub(crate) fn generate(input: FlagsInput) -> TokenStream2 {
         }
 
         macro_rules! #impl_ints_macro {
-            ($($ty:ty),* $(,)?) => {
+            ($($ty:ty),*) => {
                 $(
                     impl ::core::convert::From<$ty> for #enum_ident {
                         fn from(bits: $ty) -> Self {
@@ -126,7 +123,9 @@ pub(crate) fn generate(input: FlagsInput) -> TokenStream2 {
             };
         }
 
-        #impl_ints_macro!(u8, u16, u32, u64, u128);
+        #impl_ints_macro! {
+            u8, u16, u32, u64, u128
+        }
 
         impl ::core::ops::BitOr for #enum_ident {
             type Output = Self;
@@ -212,4 +211,3 @@ fn backing_type(max_value: u128) -> TokenStream2 {
         quote! { u128 }
     }
 }
-
