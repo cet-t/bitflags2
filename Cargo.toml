@@ -15,7 +15,7 @@ crate-type = ["rlib"]
 serde = ["dep:serde"]
 
 [dependencies]
-bitflags2-derive = { version = "0.2.2", path = "bitflags2-derive" }
+bitflags2-derive = { version = "0.2.3", path = "bitflags2-derive" }
 serde = { version = "1", optional = true, features = ["derive"] }
 
 [dev-dependencies]

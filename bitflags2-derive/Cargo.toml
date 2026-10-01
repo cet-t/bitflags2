@@ -1,6 +1,6 @@
 [package]
 name = "bitflags2-derive"
-version = "0.2.2"
+version = "0.2.3"
 edition = "2024"
 description = "Attribute macro implementation for the bitflags2 crate"
 readme = "README.md"
