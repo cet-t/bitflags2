@@ -109,16 +109,14 @@ pub(crate) fn parse_flags(input: ItemEnum, backing: Option<BackingType>) -> Resu
         }
 
         let flag_attr = flag_attr(&variant.attrs)?;
-        let Some(flag_attr) = flag_attr else {
-            return Err(Error::new_spanned(
-                variant.ident,
-                "flags enum variants must have #[flag] or #[flag(value)]",
-            ));
+        let directive = match flag_attr {
+            Some(flag_attr) => parse_flag_attr(flag_attr)?,
+            None => Some(FlagDirective::Auto),
         };
 
         raw_variants.push(RawFlagVariant {
             ident: variant.ident,
-            directive: parse_flag_attr(flag_attr)?,
+            directive,
             discriminant_expr: variant.discriminant.map(|(_, expr)| expr),
         });
     }

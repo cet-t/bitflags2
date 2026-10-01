@@ -47,7 +47,7 @@ assert_eq!(format!("{:?}", perm), "Read | Write");
 
 ## Flag values
 
-Each variant must be marked with `#[flag]` or `#[flag(...)]`.
+A variant is treated as a flag by default; `#[flag]` is optional and only needed to attach `#[flag(value)]` or `#[flag(ignore)]`.
 
 ```rust
 # use bitflags2::flags;

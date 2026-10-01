@@ -41,6 +41,20 @@ pub use bitflags2_derive::flags;
 mod tests {
     use super::flags;
 
+    #[flags(u16)]
+    enum Grade {
+        TierA = 0x1000,
+        TierB = 0x2000,
+        TierC = 0x3000,
+
+        High = 0x0100,
+        Middle = 0x0200,
+        Low = 0x0300,
+
+        #[flag(ignore)]
+        Newcomer,
+    }
+
     const X: u8 = 0x02;
     #[flags(u8)]
     enum Role {
